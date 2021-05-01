@@ -1,26 +1,28 @@
-mod common;
-
-use common::Git;
-
 use std::env;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+
+use anyhow::Result;
 use structopt::{clap::AppSettings, StructOpt};
+
+use common::Git;
+
+mod common;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
-    bin_name = "git push2",
-    about = env!("CARGO_PKG_DESCRIPTION"),
-    settings = &[AppSettings::TrailingVarArg, AppSettings::AllowLeadingHyphen],
+bin_name = "git push2",
+about = env ! ("CARGO_PKG_DESCRIPTION"),
+settings = & [AppSettings::TrailingVarArg, AppSettings::AllowLeadingHyphen],
 )]
 pub struct Params {
     args: Vec<String>,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let exit_status = execute();
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     std::process::exit(exit_status);
 }
 

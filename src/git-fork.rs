@@ -1,24 +1,26 @@
-mod common;
+use std::env;
+use std::io::Write;
+
+use anyhow::Result;
+use structopt::StructOpt;
 
 use common::Git;
 
-use std::env;
-use std::io::Write;
-use structopt::StructOpt;
+mod common;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
-    bin_name = "git fork",
-    about = env!("CARGO_PKG_DESCRIPTION")
+bin_name = "git fork",
+about = env ! ("CARGO_PKG_DESCRIPTION")
 )]
 pub struct Fork {
     branch_name: String,
     from: Option<String>,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let exit_status = execute();
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     std::process::exit(exit_status);
 }
 

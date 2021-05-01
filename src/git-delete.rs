@@ -43,7 +43,7 @@ pub fn run(params: Delete) -> Result<()> {
     let branch_name = branch
         .name()
         .context("Could not retrieve branch name")?
-        .expect("not valid utf-8")
+        .context("not valid utf-8")?
         .to_owned();
 
     if branch.is_head() {
@@ -52,7 +52,7 @@ pub fn run(params: Delete) -> Result<()> {
 
     // delete remote branch if any
     if let Ok(upstream) = branch.upstream() {
-        let upstream_name = upstream.get().name().expect("not valid utf-8");
+        let upstream_name = upstream.get().name().context("not valid utf-8")?;
         let remote_name = upstream_name
             .strip_suffix(&branch_name)
             .and_then(|x| x.strip_prefix("refs/remotes/"))
@@ -86,8 +86,12 @@ pub fn run(params: Delete) -> Result<()> {
         // TODO better handling for credentials using git2_credentials
         //      make sure it works with ~/.ssh/id_rsa and ssh-agent
         let mut remote_callbacks = git2::RemoteCallbacks::new();
-        let mut handler = common::CredentialHandler::new();
-        remote_callbacks.credentials(move |x, y, z| handler.credentials_callback(x, y, z));
+        let mut handler = common::CredentialHandler::new()?;
+        remote_callbacks.credentials(move |url, username_from_url, allowed_types| {
+            handler
+                .credentials_callback(url, username_from_url, allowed_types)
+                .map_err(|e| git2::Error::from_str(&e.to_string()))
+        });
 
         let mut push_options = git2::PushOptions::new();
         push_options.remote_callbacks(remote_callbacks);

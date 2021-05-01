@@ -3,6 +3,7 @@ use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
+use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
 use structopt::{clap::AppSettings, StructOpt};
 
@@ -40,9 +41,9 @@ pub struct TryMerge {
     merge_args: Vec<String>,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let exit_status = execute();
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     std::process::exit(exit_status);
 }
 
@@ -105,7 +106,7 @@ fn update_branch(mut git: Git, params: TryMerge) -> Result<(), Box<dyn std::erro
         .flatten()
         .filter_map(|x| x.ok())
     {
-        builder.add(Glob::new(entry.value().expect("invalid UTF-8"))?);
+        builder.add(Glob::new(entry.value().context("invalid UTF-8")?)?);
     }
     let ignore_conflict_set = builder.build()?;
 
@@ -181,7 +182,11 @@ fn squash_all_merge_commits(
         // NOTE: we need to have more than 1 commit to make a squash
         .skip(1)
         .last()
-        .map(|x| format!("{}", x.parent(0).unwrap().id()))
+        .map(|x| {
+            x.parent(0)
+                .map(|parent| format!("{}", parent.id()))
+        })
+        .transpose()?
     {
         Ok(Some(git.squash(
             &ancestor,
