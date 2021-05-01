@@ -456,20 +456,18 @@ impl CredentialHandler {
         Ok(
             if !self.first_attempt_failed && allowed_types.contains(CredentialType::SSH_KEY) {
                 self.first_attempt_failed = true;
-                let os_user =
-                    users::get_current_username().ok_or(GitError::UnableToGetCurrentUsername)?;
-                let user = os_user
-                    .to_str()
-                    .ok_or(GitError::InvalidUtf8)
-                    .context("current username")?;
                 let home_dir = dirs::home_dir().ok_or(GitError::UnableToGetHomeDir)?;
 
-                Cred::ssh_key(
-                    username_from_url.unwrap_or(user),
-                    Some(&home_dir.join(".ssh/id_rsa.pub")),
-                    &home_dir.join(".ssh/id_rsa"),
-                    None,
-                )
+                let username = if let Some(username) = username_from_url {
+                    username.to_string()
+                } else {
+                    whoami::username()
+                };
+
+                let public_key = home_dir.join(".ssh/id_rsa.pub");
+                let private_key = home_dir.join(".ssh/id_rsa");
+
+                Cred::ssh_key(&username, Some(&public_key), &private_key, None)
             } else {
                 self.second_handler
                     .try_next_credential(url, username_from_url, allowed_types)
