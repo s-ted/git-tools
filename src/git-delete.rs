@@ -1,14 +1,14 @@
-mod common;
+use std::env;
 
 use anyhow::{bail, Context, Result};
-use std::env;
-use std::io::Write;
 use structopt::StructOpt;
+
+mod common;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
-    bin_name = "git delete",
-    about = env!("CARGO_PKG_DESCRIPTION")
+bin_name = "git delete",
+about = env ! ("CARGO_PKG_DESCRIPTION")
 )]
 pub struct Delete {
     branch_name: String,
@@ -35,7 +35,6 @@ fn execute() -> i32 {
 }
 
 pub fn run(params: Delete) -> Result<()> {
-    let branch_name = params.branch_name.as_str();
     let repo = git2::Repository::open(".").context("Could not open repository")?;
 
     let mut branch = repo
@@ -100,7 +99,7 @@ pub fn run(params: Delete) -> Result<()> {
         println!("Upstream deleted: {}", upstream_name);
     }
 
-    branch.delete();
+    branch.delete()?;
     println!("Local branch deleted: {}", branch_name);
 
     Ok(())

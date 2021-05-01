@@ -1,14 +1,14 @@
 #![allow(dead_code)]
 
-use globset::GlobSet;
 use std::env::{current_dir, set_current_dir};
 use std::path::{Path, PathBuf};
 
 use git2::{
     Branch, BranchType, Commit, Config, Cred, CredentialType, Error, ErrorCode, FetchOptions,
-    MergeOptions, PushOptions, RemoteCallbacks, Sort, StatusOptions,
+    MergeOptions, RemoteCallbacks, Sort, StatusOptions,
 };
 pub use git2::{Oid, Repository};
+use globset::GlobSet;
 
 pub struct Git {
     pub repo: Repository,
@@ -103,7 +103,7 @@ impl Git {
         {
             Ok(x) => x,
             Err(err) if err.code() == ErrorCode::NotFound => {
-                return Ok(format!("{}/master", remote))
+                return Ok(format!("{}/master", remote));
             }
             Err(err) => return Err(err),
         };
@@ -215,7 +215,7 @@ impl Git {
         let mut options = MergeOptions::new();
         options.fail_on_conflict(false);
 
-        let mut index = self.repo.merge_commits(&our, &their, Some(&mut options))?;
+        let mut index = self.repo.merge_commits(&our, &their, Some(&options))?;
         let conflicts = index.conflicts()?.collect::<Result<Vec<_>, _>>()?;
         let mut ignored_conflicts = Vec::new();
         for conflict in conflicts {
@@ -271,9 +271,9 @@ impl Git {
     pub fn rev_list(&self, from: &str, to: &str, reversed: bool) -> Result<Vec<String>, Error> {
         let mut revwalk = self.repo.revwalk()?;
         if reversed {
-            revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::REVERSE);
+            revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::REVERSE)?;
         } else {
-            revwalk.set_sorting(Sort::TOPOLOGICAL);
+            revwalk.set_sorting(Sort::TOPOLOGICAL)?;
         }
 
         let from_object = self.repo.revparse_single(from)?;

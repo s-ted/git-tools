@@ -1,19 +1,20 @@
-mod common;
-
-use common::Git;
-
-use globset::{Glob, GlobSetBuilder};
 use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+
+use globset::{Glob, GlobSetBuilder};
 use structopt::{clap::AppSettings, StructOpt};
+
+use common::Git;
+
+mod common;
 
 #[derive(StructOpt, Debug)]
 #[structopt(
-    bin_name = "git try-merge",
-    about = env!("CARGO_PKG_DESCRIPTION"),
-    settings = &[AppSettings::TrailingVarArg, AppSettings::AllowLeadingHyphen],
+bin_name = "git try-merge",
+about = env ! ("CARGO_PKG_DESCRIPTION"),
+settings = & [AppSettings::TrailingVarArg, AppSettings::AllowLeadingHyphen],
 )]
 pub struct TryMerge {
     /// Squash all the merge commits together at the end.
@@ -67,8 +68,11 @@ pub fn run(params: TryMerge) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn update_branch(mut git: Git, params: TryMerge) -> Result<(), Box<dyn std::error::Error>> {
-    let default_branch = git.get_default_branch("origin")?;
-    let top_rev = params.revision.clone().unwrap_or_else(|| default_branch);
+    let top_rev = if let Some(revision) = params.revision {
+        revision
+    } else {
+        git.get_default_branch("origin")?
+    };
 
     if top_rev.contains('/') {
         git.update_upstream(top_rev.as_str())?;
