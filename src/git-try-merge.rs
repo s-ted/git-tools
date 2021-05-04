@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -17,7 +16,7 @@ bin_name = "git try-merge",
 about = env ! ("CARGO_PKG_DESCRIPTION"),
 settings = & [AppSettings::TrailingVarArg, AppSettings::AllowLeadingHyphen],
 )]
-pub struct TryMerge {
+struct TryMerge {
     /// Squash all the merge commits together at the end.
     ///
     /// You can make this behavior the default using the following command:
@@ -42,158 +41,149 @@ pub struct TryMerge {
 }
 
 fn main() -> Result<()> {
-    let exit_status = execute();
+    let exit_status = TryMerge::from_args().run()?;
     std::io::stdout().flush()?;
-    std::process::exit(exit_status);
+
+    std::process::exit(exit_status)
 }
 
 const SUCCESS: i32 = 0;
-const FAILURE: i32 = 1;
 
-fn execute() -> i32 {
-    let opts = TryMerge::from_args();
+impl TryMerge {
+    pub fn run(self: TryMerge) -> Result<i32> {
+        let mut git = Git::open()?;
 
-    if let Err(err) = run(opts) {
-        eprintln!("{}", err);
+        let top_rev = if let Some(revision) = self.revision {
+            revision
+        } else {
+            git.get_default_branch("origin")?
+        };
 
-        FAILURE
-    } else {
-        SUCCESS
-    }
-}
+        if top_rev.contains('/') {
+            git.update_upstream(top_rev.as_str())?;
+        }
 
-pub fn run(params: TryMerge) -> Result<(), Box<dyn std::error::Error>> {
-    let git = Git::open()?;
+        if git.has_file_changes()? {
+            return Err(TryMergeError::NoCommittedChanges.into());
+        }
 
-    update_branch(git, params)
-}
+        let mut rev_list = git.rev_list("HEAD", top_rev.as_str(), true)?;
 
-fn update_branch(mut git: Git, params: TryMerge) -> Result<(), Box<dyn std::error::Error>> {
-    let top_rev = if let Some(revision) = params.revision {
-        revision
-    } else {
-        git.get_default_branch("origin")?
-    };
+        if rev_list.is_empty() {
+            let default_squash = git.config.get_bool("try-merge.squash").ok();
+            if self.squash || default_squash.unwrap_or_default() {
+                let commit = Self::squash_all_merge_commits(&mut git, &top_rev)?;
+                if commit.is_some() {
+                    eprintln!("Your merge commits have been squashed.");
+                    return Ok(SUCCESS);
+                }
+            }
+            eprintln!("Your branch is already up-to-date.");
+            return Ok(SUCCESS);
+        }
 
-    if top_rev.contains('/') {
-        git.update_upstream(top_rev.as_str())?;
-    }
+        let mut builder = GlobSetBuilder::new();
+        for entry in git
+            .config
+            .multivar("try-merge.ignore-conflict", None)
+            .iter()
+            .flatten()
+            .filter_map(|x| x.ok())
+        {
+            builder.add(Glob::new(entry.value().context("invalid UTF-8")?)?);
+        }
+        let ignore_conflict_set = builder.build()?;
 
-    if git.has_file_changes()? {
-        return Err("The repository has not committed changes, aborting.".into());
-    }
+        let mut skipped = 0;
+        let mut last_failing_revision: Option<String> = None;
+        let mut all_ignored_conflicts = HashSet::new();
+        while let Some(revision) = rev_list.pop() {
+            let message = format!("Merge commit {} (no conflict)\n\n", revision,);
 
-    let mut rev_list = git.rev_list("HEAD", top_rev.as_str(), true)?;
+            if let Some((_, ignored_conflicts)) =
+                git.merge_no_conflict(revision.as_str(), message.as_str(), &ignore_conflict_set)?
+            {
+                println!(
+                    "All the commits to {} have been merged successfully without conflict",
+                    revision
+                );
+                all_ignored_conflicts.extend(ignored_conflicts);
 
-    if rev_list.is_empty() {
-        let default_squash = git.config.get_bool("try-merge.squash").ok();
-        if params.squash || default_squash.unwrap_or_default() {
-            let commit = squash_all_merge_commits(&mut git, &top_rev)?;
-            if commit.is_some() {
-                println!("Your merge commits have been squashed.");
-                return Ok(());
+                break;
+            } else {
+                skipped += 1;
+                last_failing_revision = Some(revision.clone());
             }
         }
-        println!("Your branch is already up-to-date.");
-        return Ok(());
-    }
 
-    let mut builder = GlobSetBuilder::new();
-    for entry in git
-        .config
-        .multivar("try-merge.ignore-conflict", None)
-        .iter()
-        .flatten()
-        .filter_map(|x| x.ok())
-    {
-        builder.add(Glob::new(entry.value().context("invalid UTF-8")?)?);
-    }
-    let ignore_conflict_set = builder.build()?;
+        if !all_ignored_conflicts.is_empty() {
+            println!("The following files had conflicts but have been ignored:");
+            for file_path in all_ignored_conflicts {
+                println!("{}", file_path);
+            }
+        }
 
-    let mut skipped = 0;
-    let mut last_failing_revision: Option<String> = None;
-    let mut all_ignored_conflicts = HashSet::new();
-    while let Some(revision) = rev_list.pop() {
-        let message = format!("Merge commit {} (no conflict)\n\n", revision,);
-
-        if let Some((_, ignored_conflicts)) =
-            git.merge_no_conflict(revision.as_str(), message.as_str(), &ignore_conflict_set)?
-        {
+        if self.no_merge {
+            return Ok(SUCCESS);
+        } else if let Some(revision) = last_failing_revision {
             println!(
-                "All the commits to {} have been merged successfully without conflict",
-                revision
+                "Your current branch is still behind '{}' by {} commit(s).",
+                top_rev, skipped
             );
-            all_ignored_conflicts.extend(ignored_conflicts);
+            println!("First merge conflict detected on: {}", revision);
 
-            break;
+            let message = format!("Merge commit {} (conflicts)\n\n", revision,);
+
+            return Ok(Command::new("git")
+                .args(&[
+                    "merge",
+                    "--no-ff",
+                    revision.as_str(),
+                    "-m",
+                    message.as_str(),
+                ])
+                .args(self.merge_args)
+                .spawn()?
+                .wait()?
+                .code()
+                .unwrap_or(SUCCESS));
         } else {
-            skipped += 1;
-            last_failing_revision = Some(revision.clone());
+            println!("Nothing more to merge. Your branch is up-to-date.");
+        }
+
+        Ok(SUCCESS)
+    }
+
+    fn squash_all_merge_commits(git: &mut Git, top_rev: &str) -> Result<Option<String>> {
+        let merge_commits = git.ancestors("HEAD")?.take_while(|commit| {
+            commit
+                .message()
+                .map(|msg| msg.starts_with("Merge commit"))
+                .unwrap_or_default()
+        });
+        if let Some(ancestor) = merge_commits
+            // NOTE: we need to have more than 1 commit to make a squash
+            .skip(1)
+            .last()
+            .map(|x| {
+                x.parent(0)
+                    .map(|parent| format!("{}", parent.id()))
+            })
+            .transpose()?
+        {
+            Ok(Some(git.squash(
+                &ancestor,
+                top_rev,
+                &format!("Merge branch {}", top_rev),
+            )?))
+        } else {
+            Ok(None)
         }
     }
-
-    if !all_ignored_conflicts.is_empty() {
-        println!("The following files had conflicts but have been ignored:");
-        for file_path in all_ignored_conflicts {
-            println!("{}", file_path);
-        }
-    }
-
-    if params.no_merge {
-        return Ok(());
-    } else if let Some(revision) = last_failing_revision {
-        println!(
-            "Your current branch is still behind '{}' by {} commit(s).",
-            top_rev, skipped
-        );
-        println!("First merge conflict detected on: {}", revision);
-
-        let message = format!("Merge commit {} (conflicts)\n\n", revision,);
-
-        return Err(Command::new("git")
-            .args(&[
-                "merge",
-                "--no-ff",
-                revision.as_str(),
-                "-m",
-                message.as_str(),
-            ])
-            .args(params.merge_args)
-            .exec()
-            .into());
-    } else {
-        println!("Nothing more to merge. Your branch is up-to-date.");
-    }
-
-    Ok(())
 }
 
-fn squash_all_merge_commits(
-    git: &mut Git,
-    top_rev: &str,
-) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    let merge_commits = git.ancestors("HEAD")?.take_while(|commit| {
-        commit
-            .message()
-            .map(|msg| msg.starts_with("Merge commit"))
-            .unwrap_or_default()
-    });
-    if let Some(ancestor) = merge_commits
-        // NOTE: we need to have more than 1 commit to make a squash
-        .skip(1)
-        .last()
-        .map(|x| {
-            x.parent(0)
-                .map(|parent| format!("{}", parent.id()))
-        })
-        .transpose()?
-    {
-        Ok(Some(git.squash(
-            &ancestor,
-            top_rev,
-            &format!("Merge branch {}", top_rev),
-        )?))
-    } else {
-        Ok(None)
-    }
+#[derive(thiserror::Error, Debug)]
+pub enum TryMergeError {
+    #[error("The repository has no committed changes, aborting.")]
+    NoCommittedChanges,
 }

@@ -13,7 +13,7 @@ mod common;
 bin_name = "git fork",
 about = env ! ("CARGO_PKG_DESCRIPTION")
 )]
-pub struct Fork {
+struct Fork {
     branch_name: String,
     from: Option<String>,
 }
@@ -28,9 +28,7 @@ const SUCCESS: i32 = 0;
 const FAILURE: i32 = 1;
 
 fn execute() -> i32 {
-    let opts = Fork::from_args();
-
-    if let Err(err) = run(opts) {
+    if let Err(err) = Fork::from_args().run() {
         eprintln!("{}", err);
 
         FAILURE
@@ -39,34 +37,42 @@ fn execute() -> i32 {
     }
 }
 
-pub fn run(params: Fork) -> Result<(), Box<dyn std::error::Error>> {
-    let mut git = Git::open()?;
+impl Fork {
+    fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut git = Git::open()?;
 
-    if git.has_file_changes()? {
-        return Err("The repository has not committed changes, aborting.".into());
+        if git.has_file_changes()? {
+            return Err(ForkError::NoCommittedChanges.into());
+        }
+
+        let branch_name = self.branch_name.as_str();
+        let default_branch = git.get_default_branch("origin")?;
+        let name = self
+            .from
+            .as_deref()
+            .unwrap_or_else(|| default_branch.as_str());
+
+        if name.contains('/') {
+            git.update_upstream(name)?;
+        }
+
+        let hash_or_name = git.get_branch_hash(name)?.unwrap_or_else(
+            // if name is not a branch
+            || name.to_string(),
+        );
+
+        git.branch(branch_name, Some(&hash_or_name))?;
+
+        git.switch_branch(branch_name)?;
+
+        eprintln!("Branch {} created.", branch_name);
+
+        Ok(())
     }
+}
 
-    let branch_name = params.branch_name.as_str();
-    let default_branch = git.get_default_branch("origin")?;
-    let name = params
-        .from
-        .as_deref()
-        .unwrap_or_else(|| default_branch.as_str());
-
-    if name.contains('/') {
-        git.update_upstream(name)?;
-    }
-
-    match git.get_branch_hash(name)? {
-        // name is really a branch
-        Some(hash) => git.branch(branch_name, Some(hash.as_str()))?,
-        // name was not a branch
-        None => git.branch(branch_name, Some(name))?,
-    };
-
-    git.switch_branch(branch_name)?;
-
-    println!("Branch {} created.", branch_name);
-
-    Ok(())
+#[derive(thiserror::Error, Debug)]
+pub enum ForkError {
+    #[error("The repository has no committed changes, aborting.")]
+    NoCommittedChanges,
 }

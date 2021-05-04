@@ -1,7 +1,6 @@
 use std::env;
 use std::io::Write;
-use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 use anyhow::Result;
 use structopt::{clap::AppSettings, StructOpt};
@@ -16,45 +15,31 @@ bin_name = "git push2",
 about = env ! ("CARGO_PKG_DESCRIPTION"),
 settings = & [AppSettings::TrailingVarArg, AppSettings::AllowLeadingHyphen],
 )]
-pub struct Params {
+struct Push2 {
     args: Vec<String>,
 }
 
 fn main() -> Result<()> {
-    let exit_status = execute();
+    let exit_status = Push2::from_args().run()?;
     std::io::stdout().flush()?;
-    std::process::exit(exit_status);
+
+    std::process::exit(exit_status.code().unwrap_or_default())
 }
 
-const SUCCESS: i32 = 0;
-const FAILURE: i32 = 1;
+impl Push2 {
+    fn run(&self) -> Result<ExitStatus> {
+        let git = Git::open()?;
 
-fn execute() -> i32 {
-    let opts = Params::from_args();
+        let upstream_args = match (git.branch_name.as_ref(), git.upstream.as_ref()) {
+            (Some(name), None) => vec!["--set-upstream", "origin", name],
+            _ => vec![],
+        };
 
-    if let Err(err) = run(opts) {
-        eprintln!("{}", err);
-
-        FAILURE
-    } else {
-        SUCCESS
+        Ok(Command::new("git")
+            .arg("push")
+            .args(&upstream_args)
+            .args(&self.args)
+            .spawn()?
+            .wait()?)
     }
-}
-
-pub fn run(params: Params) -> Result<(), Box<dyn std::error::Error>> {
-    let git = Git::open()?;
-
-    Err(match (git.branch_name.as_ref(), git.upstream.as_ref()) {
-        (Some(name), None) => Command::new("git")
-            .arg("push")
-            .args(&["--set-upstream", "origin", name])
-            .args(params.args)
-            .exec()
-            .into(),
-        _ => Command::new("git")
-            .arg("push")
-            .args(params.args)
-            .exec()
-            .into(),
-    })
 }
